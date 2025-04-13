@@ -19,6 +19,7 @@ COPY . .
 # EXPOSE 8080 # Not strictly needed as Cloud Run injects PORT
 
 # Command to run the application using Gunicorn
-# Use the PORT environment variable provided by Cloud Run
+# Use the PORT environment variable provided by Cloud Run/Render
 # Use 0.0.0.0 to listen on all interfaces
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "app:app"]
+# Use the shell form of CMD to allow shell processing of $PORT
+CMD gunicorn --bind 0.0.0.0:$PORT app:app
