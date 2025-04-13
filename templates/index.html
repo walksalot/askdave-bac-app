@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>BAC Calculator</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+            rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&display=swap" rel="stylesheet">
+    </head>
+
+    <body>
+        {# Status Overlay - Hidden initially #}
+        <div id="status-overlay" class="status-overlay">
+            <span id="status-overlay-text"></span>
+        </div>
+
+        <div class="main-layout">
+            <h2 class="joke-header">AskDaveAboutYourBAC.lol</h2>
+            <div class="input-column">
+                <div class="container input-container">
+                    <h1>Blood Alcohol Content (BAC) Estimator</h1>
+
+                    {# Error message div - controlled by JS #}
+                    <div class="error-message" style="display: none;"></div>
+
+                    {# Result text - controlled by JS #}
+                    <div id="result-text-container" class="result-text-container" style="display: none;">
+                        <h2>Estimated Current BAC:</h2>
+                        <p id="bac-result-text">-</p>
+                        <p id="warning-text"></p>
+                    </div>
+
+                    <form id="bac-form">
+                        <div class="form-row">
+                            <div class="form-group weight-group">
+                                <label for="weight">Weight (lbs):</label>
+                                <input type="number" id="weight" name="weight" step="1" min="1" required
+                                    placeholder="Enter weight in pounds">
+                            </div>
+
+                            <div class="form-group gender-group">
+                                <label>Gender:</label>
+                                <div class="radio-options">
+                                    <input type="radio" id="male" name="gender" value="male" required checked>
+                                    <label for="male">Male</label>
+                                    <input type="radio" id="female" name="gender" value="female" required>
+                                    <label for="female">Female</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <fieldset class="drinks-fieldset">
+                            <legend>
+                                Drinks Consumed
+                                <span id="info-icon" class="info-icon" title="What is a standard drink?">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" /></svg>
+                                </span>
+                            </legend>
+
+                            <!-- Pop-up for Standard Drink Info -->
+                            <div id="standard-drink-popup" class="info-popup">
+                                <p><strong>What is a Standard Drink?</strong></p>
+                                <p>A standard drink contains roughly 10 grams of pure alcohol. Examples:</p>
+                                <ul>
+                                    <li>🍺 12 oz Beer (~5% ABV)</li>
+                                    <li>🍷 5 oz Wine (~12% ABV)</li>
+                                    <li>🥃 1.5 oz Shot (~40% ABV)</li>
+                                </ul>
+                                <p><small>ABV = Alcohol By Volume</small></p>
+                            </div>
+
+                            <div class="form-row drinks-row">
+                                <div class="form-group drink-group">
+                                    <label for="drinks_beer">🍺 Beers:</label>
+                                    <select id="drinks_beer" name="drinks_beer">
+                                        {% for i in range(0, 21) %}
+                                        <option value="{{ i }}">{{ i }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                <div class="form-group drink-group">
+                                    <label for="drinks_wine">🍷 Wine:</label>
+                                    <select id="drinks_wine" name="drinks_wine">
+                                        {% for i in range(0, 21) %}
+                                        <option value="{{ i }}">{{ i }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                <div class="form-group drink-group">
+                                    <label for="drinks_shot">🥃 Shots:</label>
+                                    <select id="drinks_shot" name="drinks_shot">
+                                        {% for i in range(0, 21) %}
+                                        <option value="{{ i }}">{{ i }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <div class="form-row time-input-row">
+                            <div class="form-group time-hours-group">
+                                 <label for="time_hours">Time Since First Drink:</label>
+                                 <input type="number" id="time_hours" name="time_hours" min="0" max="48" step="1" required placeholder="Hours">
+                            </div>
+                            <div class="form-group time-minutes-group">
+                                 <label for="time_minutes">&nbsp;</label> <!-- Spacer label -->
+                                 <input type="number" id="time_minutes" name="time_minutes" min="0" max="59" step="5" required placeholder="Mins">
+                             </div>
+                         </div>
+
+                        <button type="submit" class="calculate-button">Calculate BAC & Show Graph</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="graph-column">
+                <div class="container graph-container">
+                    <h2>BAC Over Time Projection</h2>
+                    <div class="chart-wrapper">
+                        <canvas id="bacChart"></canvas>
+                    </div>
+                    <p class="graph-note">This graph projects your estimated BAC from the time of your first drink up to
+                        6 hours later, assuming average metabolism.</p>
+                    {# New div for interpretation text #}
+                    <div id="graph-interpretation" class="graph-interpretation-text"></div>
+                </div>
+            </div>
+        </div>
+
+        {# Blackjack Game Area - Hidden Initially #}
+        <div id="blackjack-container" class="blackjack-container">
+            <div class="container blackjack-content">
+                <h2 id="blackjack-message">Maybe Blackjack it off?</h2>
+                <p id="countdown-timer" class="countdown-timer"></p>
+
+                <div class="blackjack-table">
+                    <div class="hand-area dealer-hand">
+                        <h3>Dealer (<span id="dealer-score">?</span>)</h3>
+                        <div id="dealer-cards" class="cards"></div>
+                    </div>
+
+                    <div class="hand-area player-hand">
+                        <h3>You (<span id="player-score">0</span>)</h3>
+                        <div id="player-cards" class="cards"></div>
+                    </div>
+                </div>
+
+                <p id="blackjack-result" class="blackjack-result-text"></p>
+
+                <div id="blackjack-actions" class="blackjack-actions">
+                    <button id="btn-hit" class="blackjack-button">Hit</button>
+                    <button id="btn-stand" class="blackjack-button">Stand</button>
+                    <button id="btn-new-game" class="blackjack-button new-game-button">New Game</button>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+        <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    </body>
+
+</html>
