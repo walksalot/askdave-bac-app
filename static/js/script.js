@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const graphColumn = document.querySelector('.graph-column');
     const statusOverlay = document.getElementById('status-overlay');
     const statusOverlayText = document.getElementById('status-overlay-text');
+    const calculateButton = bacForm ? bacForm.querySelector('button[type="submit"]') : null;
 
     if (!canvas || !bacForm || !resultTextContainer || !bacResultText || !warningText || !errorMessageDiv) {
         console.error("Essential page element not found!");
@@ -34,21 +35,22 @@ document.addEventListener('DOMContentLoaded', () => {
     let bacChart = null;
     let currentBacAnnotation = {};
     let overlayTimeout = null;
+    let deck = [];
+    let playerCards = [];
+    let dealerCards = [];
+    let playerScore = 0;
+    let dealerScore = 0;
+    let gameInProgress = false;
+    let listenersAttached = false;
+    const suits = ['♥', '♦', '♣', '♠'];
+    const values = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
     console.log('Script loaded. Checking for ChartAnnotation...');
     console.log('ChartAnnotation object:', window.ChartAnnotation);
 
     // Register the annotation plugin if available
-    if (window.ChartAnnotation) {
-        try {
-            Chart.register(window.ChartAnnotation);
-            console.log("ChartAnnotation plugin registered successfully.");
-        } catch (e) {
-            console.error("Failed to register ChartAnnotation plugin:", e);
-        }
-    } else {
-        console.warn("Chart.js Annotation plugin was not found on window object.");
-    }
+    // if (window.ChartAnnotation) { Chart.register(window.ChartAnnotation); console.log("ChartAnnotation registered."); }
+    // else { console.warn("ChartAnnotation plugin check skipped for debugging."); }
 
     // Function to create chart options dynamically
     function createChartOptions(yMax, xMax, currentHour, currentBACValue) {
@@ -104,49 +106,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 legend: {
                     display: false
-                },
-                annotation: {
-                    drawTime: 'beforeDatasetsDraw',
-                    annotations: {
-                        legalLimitLine: {
-                            type: 'line',
-                            yMin: 0.08,
-                            yMax: 0.08,
-                            borderColor: 'rgba(255, 99, 132, 0.8)',
-                            borderWidth: 2,
-                            borderDash: [6, 6],
-                            label: {
-                                content: 'Legal Limit (0.08%)',
-                                position: 'start',
-                                display: true,
-                                color: 'rgb(255, 99, 132)',
-                                backgroundColor: 'rgba(255, 255, 255, 0.7)',
-                                font: { weight: 'normal', size: 10 },
-                                yAdjust: -5 // Adjust label position slightly
-                            }
-                        },
-                        // Add current BAC point annotation dynamically if valid
-                        ...(currentHour !== null && currentBACValue !== null && !isNaN(currentHour) && !isNaN(currentBACValue) && {
-                             currentBacPoint: {
-                                type: 'point',
-                                xValue: currentHour.toFixed(1),
-                                yValue: currentBACValue,
-                                backgroundColor: 'rgba(255, 159, 64, 0.9)', // Orange point
-                                radius: 6,
-                                borderColor: 'rgba(255, 159, 64, 1)',
-                                borderWidth: 2,
-                                label: {
-                                    content: `Current: ${currentBACValue.toFixed(3)}%`,
-                                    display: true,
-                                    position: 'top',
-                                    backgroundColor: 'rgba(255, 159, 64, 0.8)',
-                                    color: '#fff',
-                                    font: { size: 10, weight: 'bold'},
-                                    yAdjust: -10
-                                }
-                             }
-                        })
-                    }
                 }
             },
             elements: {
@@ -165,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
-        console.log('Generated Chart Options:', options);
+        console.log('Generated Chart Options (No Annotations):', options);
         return options;
     }
 
@@ -207,164 +166,123 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Form Submission Logic ---
-    const calculateButton = bacForm.querySelector('button[type="submit"]');
-    bacForm.addEventListener('submit', async (event) => {
+    const handleBacCalculation = async (event) => {
+        console.error("--> handleBacCalculation FUNCTION CALLED <--- Type:", event.type);
+        // ** MUST BE FIRST LINE **
         event.preventDefault();
+        event.stopPropagation(); // Add stopPropagation for good measure
+        console.log("Default form submission prevented.");
+
         clearPreviousResults();
 
         const formData = new FormData(bacForm);
         const data = {};
-        // Specific handling for time
-        let timeHours = 0;
-        let timeMinutes = 0;
-
+        let timeHours = 0, timeMinutes = 0;
         formData.forEach((value, key) => {
-            if (key === 'time_hours') {
-                timeHours = parseInt(value, 10) || 0;
-            } else if (key === 'time_minutes') {
-                timeMinutes = parseInt(value, 10) || 0;
-            } else {
-                data[key] = value; // Collect other data normally
-            }
+            if (key === 'time_hours') timeHours = parseInt(value, 10) || 0;
+            else if (key === 'time_minutes') timeMinutes = parseInt(value, 10) || 0;
+            else data[key] = value;
         });
-
-        // Calculate total hours in decimal format for backend
         const totalDecimalHours = timeHours + (timeMinutes / 60.0);
-        data['hours'] = totalDecimalHours; // Add to data object sent to backend
+        data['hours'] = totalDecimalHours;
 
-        // Basic client-side validation
-        if (!data.weight || data.weight <= 0 || !data.gender || data.hours < 0) { // Check calculated hours
-            displayError("Please fill in all fields with valid values (Weight > 0, Time >= 0).");
+        if (!data.weight || data.weight <= 0 || !data.gender || data.hours < 0 || timeMinutes > 59) {
+            displayError("Please fill in all fields with valid values.");
             return;
         }
-        // Ensure minutes are within range if provided
-        if (timeMinutes < 0 || timeMinutes > 59) {
-             displayError("Minutes must be between 0 and 59.");
-             return;
-        }
+
+        if(calculateButton) calculateButton.disabled = true; calculateButton.textContent = 'Calculating...';
 
         try {
-            calculateButton.disabled = true;
-            calculateButton.textContent = 'Calculating...';
-
             const response = await fetch('/calculate', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(data),
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
             });
-
             const result = await response.json();
+            if (!response.ok) throw new Error(result.error || `HTTP Error: ${response.status}`);
+            if (result.error) throw new Error(result.error);
 
-            if (!response.ok) {
-                throw new Error(result.error || `Calculation failed (Status: ${response.status})`);
-            }
-
-            if (result.error) {
-                displayError(result.error);
-                hideBlackjack(); // Hide game on error
-            } else {
-                displayResults(result);
-                generateChartData(result);
-            }
+            console.log("Calculation successful:", result);
+            displayBacResults(result);
+            generateChartData(result);
+            handleStatusUpdate(result);
 
         } catch (error) {
             console.error('Calculation error:', error);
-            displayError(error.message || "An error occurred during calculation.");
-            hideBlackjack(); // Hide game on fetch error
+            displayError(error.message || "Calculation error.");
         } finally {
-            calculateButton.disabled = false;
-            calculateButton.textContent = 'Calculate BAC & Show Graph';
+             if(calculateButton) calculateButton.disabled = false; calculateButton.textContent = 'Calculate BAC & Show Graph';
         }
-    });
+    };
 
     // --- Helper Functions ---
 
     function clearPreviousResults() {
-        errorMessageDiv.style.display = 'none';
-        errorMessageDiv.textContent = '';
-        resultTextContainer.style.display = 'none';
-        bacResultText.textContent = '-';
-        warningText.textContent = '';
-        if (bacChart) {
-            bacChart.destroy();
-            bacChart = null;
-        }
-        if (graphColumn) {
-            graphColumn.classList.remove('visible');
-        }
+        console.log("Clearing previous results...");
+        if (errorMessageDiv) errorMessageDiv.style.display = 'none'; errorMessageDiv.textContent = '';
+        if (resultTextContainer) resultTextContainer.style.display = 'none';
+        if (bacResultText) bacResultText.textContent = '-';
+        if (warningText) warningText.textContent = '';
+        if (bacChart) { bacChart.destroy(); bacChart = null; }
+        if (graphColumn) graphColumn.classList.remove('visible');
         if (overlayTimeout) clearTimeout(overlayTimeout);
         if (statusOverlay) statusOverlay.classList.remove('visible', 'status-good', 'status-careful', 'status-nah');
         hideBlackjack();
     }
 
     function displayError(message) {
-        errorMessageDiv.textContent = `Error: ${message}`;
-        errorMessageDiv.style.display = 'block';
-        resultTextContainer.style.display = 'none';
-        if (bacChart) {
-             bacChart.destroy();
-             bacChart = null;
-        }
-        if (graphColumn) {
-            graphColumn.classList.remove('visible');
-        }
+        console.error("Displaying Error:", message);
+        if(errorMessageDiv) { errorMessageDiv.textContent = `Error: ${message}`; errorMessageDiv.style.display = 'block'; }
+        if(resultTextContainer) resultTextContainer.style.display = 'none';
+        if (bacChart) { bacChart.destroy(); bacChart = null; }
+        if (graphColumn) graphColumn.classList.remove('visible');
         if (overlayTimeout) clearTimeout(overlayTimeout);
         if (statusOverlay) statusOverlay.classList.remove('visible', 'status-good', 'status-careful', 'status-nah');
         hideBlackjack();
     }
 
-    function displayResults(resultData) {
-        errorMessageDiv.style.display = 'none';
-        bacResultText.textContent = `${resultData.current_bac} %`;
-        warningText.textContent = `(Graph shows projection)`;
-        resultTextContainer.style.display = 'block';
+    function displayBacResults(resultData) {
+         if(errorMessageDiv) errorMessageDiv.style.display = 'none';
+         if(bacResultText) bacResultText.textContent = `${resultData.current_bac} %`;
+         if(warningText) warningText.textContent = `(Graph shows projection)`;
+         if(resultTextContainer) resultTextContainer.style.display = 'block';
+    }
 
+    function handleStatusUpdate(resultData) {
         const bacFloat = parseFloat(resultData.current_bac);
-        let statusMsg = '';
-        let statusClass = '';
-        let showBlackjackGame = false;
+        let statusMsg = '', statusClass = '', showBlackjack = false;
 
         if (isNaN(bacFloat)) {
-            statusMsg = "Error?";
-            statusClass = 'status-nah';
+            statusMsg = "Error?"; statusClass = 'status-nah';
         } else if (bacFloat >= 0.08) {
-            statusMsg = "Nah bruh 🛑";
-            statusClass = 'status-nah';
-            showBlackjackGame = true; // SHOW GAME
-            blackjackMessage.textContent = "Whoa there! Maybe Blackjack it off till you're under 0.08?";
+            statusMsg = "Nah bruh 🛑"; statusClass = 'status-nah'; showBlackjack = true;
+            if(blackjackMessage) blackjackMessage.textContent = "Whoa! Maybe Blackjack it off?";
         } else if (bacFloat >= 0.04) {
-             statusMsg = "Careful bruh 👀";
-             statusClass = 'status-careful';
+             statusMsg = "Careful bruh 👀"; statusClass = 'status-careful';
         } else {
-            statusMsg = "You good bruh 👍";
-            statusClass = 'status-good';
+            statusMsg = "You good bruh 👍"; statusClass = 'status-good';
         }
 
-        if (statusOverlay && statusOverlayText) {
-            if (overlayTimeout) clearTimeout(overlayTimeout);
-            statusOverlay.classList.remove('visible', 'status-good', 'status-careful', 'status-nah');
+        triggerOverlay(statusMsg, statusClass);
 
-            void statusOverlay.offsetWidth;
-
-            statusOverlayText.textContent = statusMsg;
-            statusOverlay.classList.add(statusClass);
-
-            statusOverlay.classList.add('visible');
-
-            overlayTimeout = setTimeout(() => {
-                statusOverlay.classList.remove('visible');
-            }, 3500);
-        }
-
-        // Show/Hide Blackjack based on status
-        if (showBlackjackGame) {
-            blackjackContainer.classList.add('visible');
-            startNewBlackjackGame(); // Start game when shown
+        if (showBlackjack) {
+            console.log("BAC >= 0.08, showing Blackjack and starting new game.")
+            if(blackjackContainer) blackjackContainer.classList.add('visible');
+            startNewBlackjackGame();
         } else {
             hideBlackjack();
         }
+    }
+
+    function triggerOverlay(message, statusClass) {
+        if (!statusOverlay || !statusOverlayText) return;
+        console.log(`Triggering overlay: ${message}, Class: ${statusClass}`);
+        if (overlayTimeout) clearTimeout(overlayTimeout);
+        statusOverlay.className = 'status-overlay';
+        void statusOverlay.offsetWidth;
+        statusOverlayText.textContent = message;
+        statusOverlay.classList.add(statusClass);
+        statusOverlay.classList.add('visible');
+        overlayTimeout = setTimeout(() => { statusOverlay.classList.remove('visible'); }, 3500);
     }
 
     function generateChartData(resultData) {
@@ -466,17 +384,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const standButton = document.getElementById('btn-stand');
     const newGameButton = document.getElementById('btn-new-game');
 
-    let deck = [];
-    let playerCards = [];
-    let dealerCards = [];
-    let playerScore = 0;
-    let dealerScore = 0;
-    let gameInProgress = false;
-    const suits = ['♥', '♦', '♣', '♠'];
-    const values = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-
     // --- Blackjack Game Functions ---
 
+    // Creates a standard 52-card deck
     function createDeck() {
         deck = [];
         for (const suit of suits) {
@@ -486,6 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Shuffles the deck using Fisher-Yates algorithm
     function shuffleDeck() {
         for (let i = deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -493,12 +404,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Gets the numerical value of a card (A=11 initially, J/Q/K=10)
     function getCardValue(card) {
         if (['J', 'Q', 'K'].includes(card.value)) return 10;
         if (card.value === 'A') return 11; // Handle Ace as 11 initially
         return parseInt(card.value);
     }
 
+    // Calculates the score of a hand, adjusting for Aces
     function calculateScore(hand) {
         let score = hand.reduce((sum, card) => sum + getCardValue(card), 0);
         let aceCount = hand.filter(card => card.value === 'A').length;
@@ -510,6 +423,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return score;
     }
 
+    // Creates and appends a card element to the UI
     function renderCard(card, element, hideFirstDealerCard = false) {
         const cardDiv = document.createElement('div');
         cardDiv.classList.add('card');
@@ -526,18 +440,30 @@ document.addEventListener('DOMContentLoaded', () => {
         element.appendChild(cardDiv);
     }
 
-    function updateScores() {
+    // Updates the displayed scores based on current hands
+    function updateScores(revealDealer = false) {
         playerScore = calculateScore(playerCards);
         dealerScore = calculateScore(dealerCards);
         playerScoreEl.textContent = playerScore;
-         // Only show full dealer score when game ends or if showing hole card logic is complex
-        if (!gameInProgress || dealerCards.length < 2) {
-            dealerScoreEl.textContent = dealerCards.length > 0 ? getCardValue(dealerCards[0]) + ' + ?' : '?';
+
+        // Update dealer score display based on game state
+        if (revealDealer || !gameInProgress || dealerCards.length < 2) {
+            dealerScoreEl.textContent = dealerScore; // Show full score when revealed or game over
         } else {
-            dealerScoreEl.textContent = dealerScore;
+             // Show only the value of the second card initially
+             dealerScoreEl.textContent = dealerCards.length > 1 ? getCardValue(dealerCards[1]) : '?';
+             // Add hidden card logic if needed here or in renderCard
+             if (dealerCardsEl.children.length > 0 && !dealerCardsEl.children[0].classList.contains('hidden-card')) {
+                // If first card element exists but isn't hidden, show ?
+                 dealerScoreEl.textContent += ' + ?';
+             } else if (dealerCards.length === 1) {
+                 dealerScoreEl.textContent = '?';
+             }
         }
+        console.log(`Scores Updated - Player: ${playerScore}, Dealer: ${dealerScoreEl ? dealerScoreEl.textContent : 'N/A'}`);
     }
 
+    // Deals the initial two cards to player and dealer
     function dealInitialCards() {
         playerCards.push(deck.pop());
         dealerCards.push(deck.pop());
@@ -547,155 +473,242 @@ document.addEventListener('DOMContentLoaded', () => {
         dealerCardsEl.innerHTML = '';
         playerCardsEl.innerHTML = '';
 
-        renderCard(dealerCards[0], dealerCardsEl, true); // Hide first dealer card
+        renderCard(dealerCards[0], dealerCardsEl, true); // Pass true to hide first card
         renderCard(dealerCards[1], dealerCardsEl);
         renderCard(playerCards[0], playerCardsEl);
         renderCard(playerCards[1], playerCardsEl);
-
-        updateScores();
+        updateScores(false); // Update scores, keep dealer hidden
     }
 
-    function checkGameOver() {
+    // Checks if the game has ended (player bust, blackjack)
+    function checkGameOver(isInitialDeal = false) {
+        let gameOver = false;
+        let message = "";
+        playerScore = calculateScore(playerCards); // Ensure score is current
+
+        console.log(`Checking Game Over - Player Score: ${playerScore}`);
+
         if (playerScore > 21) {
-            endGame("You busted! Dealer wins.");
-            return true;
+            message = "You busted! Dealer wins. 😭";
+            gameOver = true;
+        } else if (isInitialDeal && playerScore === 21) { // Player Blackjack on deal
+             dealerScore = calculateScore(dealerCards);
+             if (dealerScore === 21) { // Dealer also Blackjack
+                 message = "Push! Both have Blackjack. 🤝";
+             } else {
+                 message = "Blackjack! You win! 😎";
+             }
+             gameOver = true;
         }
-        // Check for Blackjack immediately after deal
-        if (playerCards.length === 2 && playerScore === 21) {
-            // Dealer checks for blackjack only if player has one
-            if (calculateScore(dealerCards) === 21) {
-                 endGame("Push! Both have Blackjack.");
-            } else {
-                 endGame("Blackjack! You win!");
-            }
-            revealDealerCard();
-            return true;
+        // Note: Player hitting to 21 isn't an auto-win, they must stand.
+
+        if (gameOver) {
+             endGame(message);
         }
-        return false;
+        return gameOver;
     }
 
+    // Reveals the dealer's hidden first card
     function revealDealerCard() {
         console.log("Revealing dealer card");
-         if (dealerCardsEl.children.length > 0 && dealerCards.length > 0) {
-             const firstCardEl = dealerCardsEl.children[0];
-             if (firstCardEl && firstCardEl.classList.contains('hidden-card')) {
-                 firstCardEl.innerHTML = `${dealerCards[0].value}${dealerCards[0].suit}`;
-                 firstCardEl.classList.remove('hidden-card');
-                 console.log("Dealer first card revealed:", dealerCards[0]);
-             }
-             // Always update the score display after revealing
-             dealerScore = calculateScore(dealerCards);
-             dealerScoreEl.textContent = dealerScore;
-             console.log("Dealer score after reveal:", dealerScore);
-         }
+        if (dealerCardsEl.children.length > 0 && dealerCards.length > 0) {
+            const firstCardEl = dealerCardsEl.children[0];
+            if (firstCardEl && firstCardEl.classList.contains('hidden-card')) {
+                firstCardEl.innerHTML = `${dealerCards[0].value}${dealerCards[0].suit}`;
+                firstCardEl.classList.remove('hidden-card');
+            }
+        }
+        // Update score display to show full score
+        updateScores(true);
     }
 
+    // Handles the dealer's turn logic (hitting until 17+)
     function dealerTurn() {
         console.log("Dealer Turn Starts");
-        revealDealerCard();
+        revealDealerCard(); // Reveal and update score display
 
-        // Dealer hits until score is 17 or higher
-        while (calculateScore(dealerCards) < 17) { // Recalculate score each loop
-             console.log(`Dealer score ${calculateScore(dealerCards)}, Dealer Hits`);
-             const newCard = deck.pop();
-             if (!newCard) {
-                 console.error("Deck empty during dealer turn!");
-                 break; // Prevent error if deck runs out (unlikely with 1 deck)
-             }
-             dealerCards.push(newCard);
-             renderCard(dealerCards[dealerCards.length - 1], dealerCardsEl);
-             // Update internal score variable for next loop check
-             dealerScore = calculateScore(dealerCards);
-             dealerScoreEl.textContent = dealerScore; // Update displayed score
-        }
-
-        // Update final dealer score display after hitting stops
-        dealerScore = calculateScore(dealerCards);
-        dealerScoreEl.textContent = dealerScore;
-        console.log("Dealer final score:", dealerScore);
-
-        // Determine winner
-        if (dealerScore > 21) {
-            endGame("Dealer busted! You win! 🎉");
-        } else if (dealerScore > playerScore) {
-            endGame("Dealer wins. 😭");
-        } else if (dealerScore < playerScore) {
-            endGame("You win! 😎");
-        } else { // dealerScore === playerScore
-            endGame("Push! 🤝");
-        }
+        // Use setInterval for a slight delay between dealer hits for visual effect
+        const dealerInterval = setInterval(() => {
+            dealerScore = calculateScore(dealerCards); // Recalculate each time
+            if (dealerScore < 17) {
+                console.log(`Dealer score ${dealerScore}, Dealer Hits`);
+                const newCard = deck.pop();
+                if (!newCard) {
+                    console.error("Deck empty during dealer turn!");
+                    clearInterval(dealerInterval);
+                    endGame("Deck empty!"); // Or handle differently
+                    return;
+                }
+                dealerCards.push(newCard);
+                renderCard(dealerCards[dealerCards.length - 1], dealerCardsEl);
+                updateScores(true); // Update and reveal score
+            } else {
+                // Stop hitting
+                clearInterval(dealerInterval);
+                console.log("Dealer Stands with score:", dealerScore);
+                // Determine winner after dealer stops
+                if (dealerScore > 21) {
+                    endGame("Dealer busted! You win! 🎉");
+                } else if (dealerScore > playerScore) {
+                    endGame("Dealer wins. 😭");
+                } else if (dealerScore < playerScore) {
+                    endGame("You win! 😎");
+                } else { // dealerScore === playerScore
+                    endGame("Push! 🤝");
+                }
+            }
+        }, 800); // Delay between dealer hits (800ms)
     }
 
+    // Finalizes the game, displays message, disables buttons
     function endGame(message) {
-        console.log("Ending game:", message);
-        gameInProgress = false;
-        hitButton.disabled = true;
-        standButton.disabled = true;
+        console.error("!!! END GAME CALLED !!! Message:", message);
+        if (!gameInProgress) {
+            console.warn("endGame called but game already not in progress.");
+            return; // Prevent multiple calls
+        }
+        gameInProgress = false; // Set BEFORE disabling buttons
+        console.log("Game state set to:", gameInProgress);
+        if(hitButton) hitButton.disabled = true;
+        if(standButton) standButton.disabled = true;
         blackjackResultEl.textContent = message;
-        // Ensure dealer card is revealed and final score shown
         revealDealerCard();
     }
 
+    // Resets the game state and deals new hands
     function startNewBlackjackGame() {
+        if (!blackjackContainer) { console.error("Cannot start BJ: container missing"); return; }
+        console.log("--- Starting New Blackjack Game ---");
+        gameInProgress = true;
+        blackjackResultEl.textContent = '';
         createDeck();
         shuffleDeck();
         playerCards = [];
         dealerCards = [];
-        playerScore = 0;
-        dealerScore = 0;
-        gameInProgress = true;
+        dealInitialCards(); // Deals & updates scores
 
-        dealerCardsEl.innerHTML = '';
-        playerCardsEl.innerHTML = '';
-        blackjackResultEl.textContent = '';
-        dealerScoreEl.textContent = '?';
-        playerScoreEl.textContent = '0';
+        const gameOverOnDeal = checkGameOver(true);
 
-        hitButton.disabled = false;
-        standButton.disabled = false;
-
-        dealInitialCards();
-        // Check for immediate player Blackjack
-        checkGameOver();
+        // Enable buttons ONLY if the game didn't end on the deal
+        if (!gameOverOnDeal) {
+            console.log("Enabling player actions.");
+            if (hitButton) hitButton.disabled = false;
+            if (standButton) standButton.disabled = false;
+        } else {
+             console.log("Game ended on deal, buttons remain disabled.");
+             if (hitButton) hitButton.disabled = true;
+             if (standButton) standButton.disabled = true;
+        }
     }
 
-    function setupBlackjackListeners() {
-         hitButton.addEventListener('click', () => {
-            if (!gameInProgress) return;
-            console.log("Player Hits");
-            playerCards.push(deck.pop());
-            renderCard(playerCards[playerCards.length - 1], playerCardsEl);
-            updateScores();
-            // Check if player busted *after* updating scores
-            if (checkGameOver()) {
-                 console.log("Game Over after Hit");
-                 return; // Stop if player busted
-            }
-        });
-
-        standButton.addEventListener('click', () => {
-            if (!gameInProgress) return;
-            console.log("Player Stands");
-            hitButton.disabled = true;
-            standButton.disabled = true;
-            // Ensure dealerTurn logic executes fully
-            try {
-                dealerTurn();
-            } catch(e) {
-                console.error("Error during dealer turn:", e);
-                blackjackResultEl.textContent = "Error during dealer turn!";
-            }
-        });
-
-        newGameButton.addEventListener('click', startNewBlackjackGame);
-    }
-
-    function hideBlackjack() {
-         if (blackjackContainer) {
-            blackjackContainer.classList.remove('visible');
-            // Optionally clear game state when hiding?
-            // gameInProgress = false;
+    // Attaches event listeners to the Blackjack buttons (run once)
+    function setupBlackjackListenersOnce() {
+         if (listenersAttached) {
+             console.log("BJ Listeners already attached.");
+             return;
          }
+         console.log("Attaching Blackjack listeners...");
+         if (!hitButton || !standButton || !newGameButton) {
+             console.error("CRITICAL ERROR: Cannot attach BJ listeners - Buttons missing!");
+             return;
+         }
+
+         hitButton.addEventListener('click', () => {
+             console.log("Hit clicked. gameInProgress:", gameInProgress);
+             if (!gameInProgress) return;
+             console.log("Executing Hit...");
+             const newCard = deck.pop();
+             if (newCard) {
+                 playerCards.push(newCard);
+                 renderCard(newCard, playerCardsEl);
+                 updateScores(false);
+                 checkGameOver(false); // Check for bust only
+             }
+         });
+
+         standButton.addEventListener('click', () => {
+             console.log("Stand clicked. gameInProgress:", gameInProgress);
+             if (!gameInProgress) return;
+             console.log("Executing Stand...");
+             if(hitButton) hitButton.disabled = true;
+             if(standButton) standButton.disabled = true;
+             dealerTurn();
+         });
+
+         newGameButton.addEventListener('click', () => {
+             console.log("New Game clicked.");
+             startNewBlackjackGame();
+         });
+
+         listenersAttached = true;
+         console.log("Blackjack listeners attached.");
     }
+
+    // Hides the Blackjack game area and stops the game
+    function hideBlackjack() {
+        console.log("Hiding Blackjack container.");
+        if (!blackjackContainer) return;
+        blackjackContainer.classList.remove('visible');
+        if (gameInProgress) { // Only log if a game was actually in progress
+             console.log("Setting gameInProgress to false due to hide.");
+             gameInProgress = false;
+        }
+        // Disable buttons when hiding regardless of game state
+        if(hitButton) hitButton.disabled = true;
+        if(standButton) standButton.disabled = true;
+    }
+
+    // --- Event Listeners Setup ---
+    function setupListeners() {
+        console.log("Setting up listeners...");
+        if (bacForm) {
+            bacForm.addEventListener('submit', handleBacCalculation);
+            console.log("--> BAC form SUBMIT listener ATTACHED.");
+        } else {
+            console.error("CRITICAL: BAC Form not found! Cannot attach submit listener.");
+        }
+        // Setup other listeners (Info Popup, Blackjack)
+        if (infoIcon && infoPopup) {
+            setupInfoPopupListeners();
+            console.log("Info popup listeners attached.");
+        }
+        setupBlackjackListenersOnce();
+    }
+
+    // --- Info Popup Logic ---
+    function setupInfoPopupListeners() {
+        if (infoIcon && infoPopup) {
+            infoIcon.addEventListener('click', (event) => {
+                event.stopPropagation(); // Prevent click from immediately closing popup
+                infoPopup.classList.toggle('visible');
+            });
+
+            // Close popup if clicking outside
+            document.addEventListener('click', (event) => {
+                if (!infoPopup.contains(event.target) && !infoIcon.contains(event.target)) {
+                    infoPopup.classList.remove('visible');
+                }
+            });
+
+            // Close popup with Escape key
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') {
+                     infoPopup.classList.remove('visible');
+                }
+            });
+        } else {
+            console.warn("Info icon or popup element not found.");
+        }
+    }
+
+    // --- Initialization ---
+    console.log("DOM Loaded. Initializing...");
+    // Temporarily disable annotation plugin logic
+    // if (window.ChartAnnotation) { Chart.register(window.ChartAnnotation); console.log("ChartAnnotation registered."); }
+    // else { console.warn("ChartAnnotation plugin check skipped for debugging."); }
+    setDefaultValues();
+    setupListeners(); // Combined setup function
+    if (errorMessageDiv) errorMessageDiv.style.display = 'none';
+    hideBlackjack();
 
 });
